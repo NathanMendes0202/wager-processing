@@ -1,0 +1,6 @@
+.git
+.env
+*.zip
+README.md
+ARCHITECTURE.md
+**/*_test.go
