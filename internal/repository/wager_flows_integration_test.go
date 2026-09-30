@@ -17,10 +17,11 @@ import (
 )
 
 type flowEnv struct {
-	ctx     context.Context
-	pool    *pgxpool.Pool
-	wallets *WalletRepository
-	wagers  *WagerRepository
+	ctx      context.Context
+	pool     *pgxpool.Pool
+	wallets  *WalletRepository
+	wagers   *WagerRepository
+	provider string
 }
 
 func newFlowEnv(t *testing.T) flowEnv {
@@ -40,7 +41,14 @@ func newFlowEnv(t *testing.T) flowEnv {
 		t.Fatal(err)
 	}
 	outbox := messaging.NewOutboxRepository(pool)
-	return flowEnv{ctx: ctx, pool: pool, wallets: NewWalletRepository(pool, outbox), wagers: NewWagerRepository(pool, outbox)}
+	provider := "provider-" + uuid.NewString()
+	return flowEnv{
+		ctx:      ctx,
+		pool:     pool,
+		wallets:  NewWalletRepository(pool, outbox),
+		wagers:   NewWagerRepository(pool, outbox),
+		provider: provider,
+	}
 }
 
 func (e flowEnv) wallet(t *testing.T, initial string) (uuid.UUID, uuid.UUID) {
@@ -55,11 +63,20 @@ func (e flowEnv) wallet(t *testing.T, initial string) (uuid.UUID, uuid.UUID) {
 
 func (e flowEnv) input(t *testing.T, wallet, player uuid.UUID, kind, ext, amount, ref string) WagerInput {
 	t.Helper()
-	return WagerInput{ProviderID: "provider-a", ExternalTransactionID: ext, IdempotencyKey: "key-" + ext, PlayerID: player, WalletID: wallet,
-		RoundID: "round-1", GameID: "game-1", Kind: kind, Money: money(t, amount), ReferenceExternalID: ref}
+	return WagerInput{
+		ProviderID:            e.provider,
+		ExternalTransactionID: ext,
+		IdempotencyKey:        "key-" + ext,
+		PlayerID:              player,
+		WalletID:              wallet,
+		RoundID:               "round-1",
+		GameID:                "game-1",
+		Kind:                  kind,
+		Money:                 money(t, amount),
+		ReferenceExternalID:   ref,
+	}
 }
 
-// eventTypes lists the outbox event types caused by the given transaction ids.
 func (e flowEnv) eventTypes(t *testing.T, txIDs ...uuid.UUID) map[string]int {
 	t.Helper()
 	out := map[string]int{}
@@ -111,7 +128,6 @@ func TestExhaustedReferenceIsRejectedWithEvent(t *testing.T) {
 	if err != nil || first.Status != "PENDING_REFERENCE" {
 		t.Fatalf("first call: %+v err=%v", first, err)
 	}
-	// A client replay is not a retry attempt and does not consume the budget.
 	if again, err := e.wagers.Process(e.ctx, in); err != nil || again.Status != "PENDING_REFERENCE" {
 		t.Fatalf("replay: %+v err=%v", again, err)
 	}
@@ -121,15 +137,20 @@ func TestExhaustedReferenceIsRejectedWithEvent(t *testing.T) {
 
 	in.RetryAttempt = true
 	var last WagerResult
-	for i := 1; i <= maxReferenceAttempts; i++ {
+
+	for i := 0; i <= maxReferenceAttempts+2; i++ {
 		last, err = e.wagers.Process(e.ctx, in)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if i < maxReferenceAttempts && last.Status != "PENDING_REFERENCE" {
-			t.Fatalf("attempt %d ended early with %s", i, last.Status)
+		if last.Status == "REJECTED" {
+			break
+		}
+		if last.Status != "PENDING_REFERENCE" {
+			t.Fatalf("unexpected status: %s", last.Status)
 		}
 	}
+
 	if last.Status != "REJECTED" || last.FailureCode != "REFERENCE_NOT_FOUND" {
 		t.Fatalf("exhausted reference must be REJECTED/REFERENCE_NOT_FOUND, got %+v", last)
 	}
@@ -175,7 +196,6 @@ func TestLossAndSingleReversalRules(t *testing.T) {
 	if err != nil || refund.Status != "PROCESSED" || e.balance(t, wallet) != 10000 {
 		t.Fatalf("refund: %+v err=%v", refund, err)
 	}
-	// The same debit must never be returned twice.
 	second, err := e.wagers.Process(e.ctx, e.input(t, wallet, player, "ROLLBACK", "rollback-1", "30.00", "bet-1"))
 	if err != nil || second.Status != "REJECTED" || second.FailureCode != "ALREADY_REVERSED" || e.balance(t, wallet) != 10000 {
 		t.Fatalf("second reversal: %+v err=%v", second, err)

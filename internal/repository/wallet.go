@@ -66,9 +66,9 @@ func (r *WalletRepository) Create(ctx context.Context, in CreateWalletInput) (do
 		}
 
 		if r.outbox != nil {
-			payload, marshalErr := json.Marshal(messaging.WalletBalanceChangedData{
-				WalletID:      walletID, // Removido .String() (agora passa o uuid.UUID direto)
-				TransactionID: txID,     // Removido .String() (agora passa o uuid.UUID direto)
+			balancePayload, marshalErr := json.Marshal(messaging.WalletBalanceChangedData{
+				WalletID:      walletID,
+				TransactionID: txID,
 				Direction:     "CREDIT",
 				Money:         messaging.MoneyData{Amount: in.InitialAmount.String(), Currency: in.InitialAmount.Currency()},
 				BalanceBefore: messaging.MoneyData{Amount: "0.00", Currency: in.InitialAmount.Currency()},
@@ -82,11 +82,35 @@ func (r *WalletRepository) Create(ctx context.Context, in CreateWalletInput) (do
 				ID:          uuid.New(),
 				AggregateID: walletID,
 				EventType:   "WalletBalanceChanged",
-				Correlation: txID.String(), // Mantido .String() aqui (Correlation costuma ser string)
-				Causation:   txID.String(), // Mantido .String() aqui (Causation costuma ser string)
+				Correlation: txID.String(),
+				Causation:   txID.String(),
 				OccurredAt:  time.Now().UTC(),
 				Version:     1,
-				Payload:     payload,
+				Payload:     balancePayload,
+			}); err != nil {
+				return domain.Wallet{}, err
+			}
+
+			processedPayload, marshalErr := json.Marshal(messaging.WagerTransactionProcessedData{
+				TransactionID: txID,
+				WalletID:      walletID,
+				PlayerID:      in.PlayerID,
+				Kind:          "OPENING",
+				Status:        "PROCESSED",
+				Money:         messaging.MoneyData{Amount: in.InitialAmount.String(), Currency: in.InitialAmount.Currency()},
+			})
+			if marshalErr != nil {
+				return domain.Wallet{}, marshalErr
+			}
+			if err = r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{
+				ID:          uuid.New(),
+				AggregateID: walletID,
+				EventType:   "WagerTransactionProcessed",
+				Correlation: txID.String(),
+				Causation:   txID.String(),
+				OccurredAt:  time.Now().UTC(),
+				Version:     1,
+				Payload:     processedPayload,
 			}); err != nil {
 				return domain.Wallet{}, err
 			}

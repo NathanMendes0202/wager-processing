@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
 	"sync"
 	"time"
 
@@ -64,17 +63,30 @@ func runScenario(dsn, name string, sameKey bool) error {
 	if _, err := db.Exec(ctx, `INSERT INTO wallets(id, player_id, currency, balance_minor, version) VALUES($1,$2,'BRL',10000,1)`, walletID, playerID); err != nil {
 		return fmt.Errorf("%s: create wallet: %w", name, err)
 	}
+	defer db.Exec(context.Background(), `DELETE FROM wager_transactions WHERE wallet_id=$1`, walletID)
 	defer db.Exec(context.Background(), `DELETE FROM wallets WHERE id=$1`, walletID)
 
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("%s: executable: %w", name, err)
+	exe, execErr := os.Executable()
+	if execErr != nil {
+		return fmt.Errorf("%s: executable: %w", name, execErr)
 	}
 
-	keys := []string{"process-1", "process-2", "process-3"}
+	runID := uuid.New().String()[:8]
+	keys := []string{
+		name + "-" + runID + "-process-1",
+		name + "-" + runID + "-process-2",
+		name + "-" + runID + "-process-3",
+	}
+	externalIDs := []string{
+		name + "-" + runID + "-external-0",
+		name + "-" + runID + "-external-1",
+		name + "-" + runID + "-external-2",
+	}
 	if sameKey {
 		keys[1] = keys[0]
 		keys[2] = keys[0]
+		externalIDs[1] = externalIDs[0]
+		externalIDs[2] = externalIDs[0]
 	}
 
 	results := make(chan childResult, 3)
@@ -90,7 +102,7 @@ func runScenario(dsn, name string, sameKey bool) error {
 				"TEST_WALLET_ID="+walletID.String(),
 				"TEST_PLAYER_ID="+playerID.String(),
 				"TEST_IDEMPOTENCY_KEY="+keys[i],
-				"TEST_EXTERNAL_ID="+name+"-external-"+strconv.Itoa(i),
+				"TEST_EXTERNAL_ID="+externalIDs[i],
 			)
 			output, err := cmd.Output()
 			if err != nil {

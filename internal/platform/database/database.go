@@ -2,6 +2,7 @@ package database
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -11,19 +12,21 @@ import (
 )
 
 func New(lc fx.Lifecycle, cfg config.Config) (*pgxpool.Pool, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10_000_000_000)
-	defer cancel()
-
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
 	}
+
+	// Timeout dedicado para o health check/ping inicial
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
 	for {
 		if err := pool.Ping(ctx); err == nil {
 			break
 		} else if ctx.Err() != nil {
 			pool.Close()
-			return nil, err
+			return nil, fmt.Errorf("database ping timeout: %w", err)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}

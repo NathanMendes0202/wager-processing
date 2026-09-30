@@ -2,6 +2,31 @@
 
 Serviço distribuído em Go para processamento financeiro de apostas, com PostgreSQL como fonte de verdade, SQS FIFO, transactional Inbox/Outbox, Keycloak/OIDC, idempotência, concorrência segura, retry de referências e reconciliação.
 
+## 🚀 Como Executar os Testes
+
+Este projeto utiliza um `Makefile` para gerenciar os comandos de build, execução e testes.
+
+### Pré-requisitos
+* **Go** (versão compatível com o `go.mod`)
+* **Docker e Docker Compose** (para subida da infraestrutura de banco de dados e mensageria)
+* **Make** 
+  * *Linux/macOS:* Já vem instalado nativamente.
+  * *Windows:* Recomenda-se executar os comandos via **Git Bash** (que já inclui o utilitário `make` e o interpretador padrão).
+
+### Comandos Disponíveis
+Comandos:
+
+```bash
+make test
+make race
+make vet
+make integration
+make test-multiprocess
+make e2e-keycloak
+make e2e-restart
+make scale-3
+```
+
 ## 1. Objetivos e garantias
 
 - Valores monetários são representados em unidades menores inteiras; não há `float` para dinheiro.
@@ -69,6 +94,7 @@ go test ./...
 go test -race ./...
 go vet ./...
 ```
+
 
 Integração real com PostgreSQL/LocalStack/Keycloak:
 

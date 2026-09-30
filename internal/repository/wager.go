@@ -47,15 +47,16 @@ type WagerInput struct {
 	Kind                  string
 	Money                 domain.Money
 	ReferenceExternalID   string
+	RetryAttempt          bool
 }
 
 type WagerResult struct {
-	TransactionID uuid.UUID
-	Status        string
-	Balance       domain.Money
-	WalletVersion int64
-	Replay        bool
-	FailureCode   string
+	TransactionID uuid.UUID    `json:"transactionId"`
+	Status        string       `json:"status"`
+	Balance       domain.Money `json:"balance"`
+	WalletVersion int64        `json:"walletVersion"`
+	Replay        bool         `json:"idempotentReplay"`
+	FailureCode   string       `json:"failureCode,omitempty"`
 }
 
 func PayloadHash(in WagerInput) string {
@@ -76,8 +77,6 @@ func PayloadHash(in WagerInput) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// ExternalKind reports whether kind may arrive from HTTP or SQS. OPENING is
-// reserved to the internal wallet opening and is never accepted here.
 func ExternalKind(kind string) bool {
 	switch kind {
 	case "BET", "WIN", "LOSS", "REFUND", "ROLLBACK":
@@ -86,8 +85,6 @@ func ExternalKind(kind string) bool {
 	return false
 }
 
-// ValidateAmount applies the per-kind zero policy: LOSS carries exactly 0.00,
-// every other external kind requires a positive amount.
 func ValidateAmount(kind string, m domain.Money) error {
 	if kind == "LOSS" {
 		if !m.IsZero() {
@@ -166,9 +163,16 @@ func (r *WagerRepository) ProcessTx(ctx context.Context, tx pgx.Tx, in WagerInpu
 			}
 			return replay, nil
 		}
-		// PENDING_REFERENCE: same operation again, try to resolve the reference.
 		txID = existing.id
 	case errors.Is(lookupErr, pgx.ErrNoRows):
+		var checkExists bool
+		if err := tx.QueryRow(ctx, `SELECT true FROM wallets WHERE id=$1 AND player_id=$2 FOR UPDATE`, in.WalletID, in.PlayerID).Scan(&checkExists); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return result, ErrWalletNotFound
+			}
+			return result, err
+		}
+
 		txID = uuid.New()
 		_, e := tx.Exec(ctx, `INSERT INTO wager_transactions (id,external_transaction_id,provider_id,idempotency_key,payload_hash,wallet_id,player_id,round_id,game_id,kind,amount_minor,currency,reference_external_transaction_id,status) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'PENDING')`,
 			txID, in.ExternalTransactionID, in.ProviderID, in.IdempotencyKey, hash, in.WalletID, in.PlayerID, in.RoundID, in.GameID, in.Kind, in.Money.MinorUnits(), in.Money.Currency(), nullableString(in.ReferenceExternalID))
@@ -179,7 +183,6 @@ func (r *WagerRepository) ProcessTx(ctx context.Context, tx pgx.Tx, in WagerInpu
 		return result, lookupErr
 	}
 
-	// Serialize every writer of this wallet. Independent wallets do not contend.
 	var balanceMinor, version int64
 	var walletCurrency string
 	e := tx.QueryRow(ctx, `SELECT balance_minor,currency,version FROM wallets WHERE id=$1 AND player_id=$2 FOR UPDATE`, in.WalletID, in.PlayerID).Scan(&balanceMinor, &walletCurrency, &version)
@@ -216,7 +219,6 @@ func (r *WagerRepository) ProcessTx(ctx context.Context, tx pgx.Tx, in WagerInpu
 		switch row.status {
 		case "PROCESSED":
 		case "PENDING", "PENDING_REFERENCE":
-			// The reference exists but is not finished yet: keep waiting.
 			return r.markPendingReference(ctx, tx, txID)
 		default:
 			return r.rejectTx(ctx, tx, txID, "REFERENCE_NOT_PROCESSED", snap)
@@ -292,11 +294,11 @@ func (r *WagerRepository) ProcessTx(ctx context.Context, tx pgx.Tx, in WagerInpu
 
 	now := time.Now().UTC()
 	processed, e := json.Marshal(messaging.WagerTransactionProcessedData{
-		TransactionID:                  txID, // Removido .String()
+		TransactionID:                  txID,
 		ProviderID:                     in.ProviderID,
 		ExternalTransactionID:          in.ExternalTransactionID,
-		WalletID:                       in.WalletID, // Removido .String()
-		PlayerID:                       in.PlayerID, // Removido .String()
+		WalletID:                       in.WalletID,
+		PlayerID:                       in.PlayerID,
 		Kind:                           in.Kind,
 		Money:                          messaging.MoneyData{Amount: in.Money.String(), Currency: in.Money.Currency()},
 		Status:                         "PROCESSED",
@@ -342,7 +344,6 @@ func (r *WagerRepository) ProcessTx(ctx context.Context, tx pgx.Tx, in WagerInpu
 	return WagerResult{TransactionID: txID, Status: "PROCESSED", Balance: newBalance, WalletVersion: newVersion}, nil
 }
 
-// movementDirection returns "" when the operation does not move money (LOSS).
 func movementDirection(kind string, ref *referenceRow) string {
 	switch kind {
 	case "BET":
@@ -350,7 +351,6 @@ func movementDirection(kind string, ref *referenceRow) string {
 	case "WIN", "REFUND":
 		return "CREDIT"
 	case "ROLLBACK":
-		// Undo the original movement: a BET was a debit, WIN/REFUND were credits.
 		if ref != nil && ref.kind == "BET" {
 			return "CREDIT"
 		}
@@ -359,8 +359,6 @@ func movementDirection(kind string, ref *referenceRow) string {
 	return ""
 }
 
-// validateReference returns a stable failure code, or "" when the reference is
-// consistent with the operation. The reference must already be PROCESSED.
 func validateReference(in WagerInput, ref referenceRow) string {
 	if ref.walletID != in.WalletID || ref.playerID != in.PlayerID || ref.roundID != in.RoundID {
 		return "REFERENCE_MISMATCH"
@@ -461,9 +459,6 @@ func (r *WagerRepository) markPendingReference(ctx context.Context, tx pgx.Tx, i
 	return WagerResult{TransactionID: id, Status: "PENDING_REFERENCE"}, nil
 }
 
-// ClaimPendingReferences reserves a small batch for a worker. The claim is
-// persisted through next_reference_attempt_at so multiple API instances can
-// safely run the worker without repeatedly selecting the same rows.
 func (r *WagerRepository) ClaimPendingReferences(ctx context.Context, limit int) ([]PendingReference, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 20
@@ -487,24 +482,27 @@ func (r *WagerRepository) ClaimPendingReferences(ctx context.Context, limit int)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
 	var pending []PendingReference
 	for rows.Next() {
 		var p PendingReference
 		if err := rows.Scan(&p.ID, &p.ProviderID, &p.ExternalTransactionID, &p.IdempotencyKey, &p.PlayerID, &p.WalletID, &p.RoundID, &p.GameID, &p.Kind, &p.AmountMinor, &p.Currency, &p.ReferenceExternalID); err != nil {
-			return nil, err
-		}
-		// Reserve the row for the duration of this processing attempt. A short
-		// lease prevents another worker from selecting it immediately.
-		if _, err := tx.Exec(ctx, `UPDATE wager_transactions SET next_reference_attempt_at=$1,updated_at=now() WHERE id=$2`, time.Now().UTC().Add(2*time.Minute), p.ID); err != nil {
+			rows.Close()
 			return nil, err
 		}
 		pending = append(pending, p)
 	}
+	rows.Close()
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
+	for _, p := range pending {
+		if _, err := tx.Exec(ctx, `UPDATE wager_transactions SET next_reference_attempt_at=$1,updated_at=now() WHERE id=$2`, time.Now().UTC().Add(2*time.Minute), p.ID); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
@@ -551,11 +549,11 @@ func (r *WagerRepository) insertRejectedEvent(ctx context.Context, tx pgx.Tx, id
 	}
 
 	payload, err := json.Marshal(messaging.WagerTransactionRejectedData{
-		TransactionID:         id, // Corrigido para uuid.UUID (sem .String())
+		TransactionID:         id,
 		ProviderID:            providerID,
 		ExternalTransactionID: externalID,
-		WalletID:              walletID, // Convertido para uuid.UUID
-		PlayerID:              playerID, // Convertido para uuid.UUID
+		WalletID:              walletID,
+		PlayerID:              playerID,
 		Kind:                  kind,
 		FailureCode:           code,
 	})
@@ -581,7 +579,7 @@ func (r *WagerRepository) insertPendingReferenceEvent(ctx context.Context, tx pg
 	}
 
 	payload, err := json.Marshal(messaging.WagerTransactionPendingReferenceData{
-		TransactionID:                  id, // Corrigido para uuid.UUID (sem .String())
+		TransactionID:                  id,
 		ProviderID:                     providerID,
 		ExternalTransactionID:          externalID,
 		ReferenceExternalTransactionID: referenceID,
@@ -644,8 +642,6 @@ func (r *WagerRepository) handleInsertError(ctx context.Context, tx pgx.Tx, in W
 	case "23503": // wallet_id foreign key
 		return WagerResult{}, ErrWalletNotFound
 	case "23505":
-		// Either unique index can fire first (external id or idempotency key),
-		// so decide by looking at what is actually committed.
 		return WagerResult{}, cause
 	}
 	return WagerResult{}, cause
@@ -659,16 +655,48 @@ func (r *WagerRepository) resolveConflict(ctx context.Context, in WagerInput, ha
 		}
 		return ex.result()
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return WagerResult{}, err
+
+	var existingID uuid.UUID
+	var existingKey string
+	var existingHash string
+	var existingStatus string
+	var existingBalance int64
+	var existingCurrency string
+	var existingVersion int64
+	var existingFailure *string
+
+	queryErr := r.db.QueryRow(ctx, `
+		SELECT id, idempotency_key, payload_hash, status, COALESCE(result_balance_minor, 0), currency, COALESCE(result_wallet_version, 0), failure_code 
+		FROM wager_transactions 
+		WHERE provider_id = $1 AND external_transaction_id = $2`,
+		in.ProviderID, in.ExternalTransactionID,
+	).Scan(&existingID, &existingKey, &existingHash, &existingStatus, &existingBalance, &existingCurrency, &existingVersion, &existingFailure)
+
+	if queryErr == nil {
+		if existingKey != in.IdempotencyKey {
+			return WagerResult{}, ErrExternalIDConflict
+		}
+		if existingHash != hash {
+			return WagerResult{}, ErrIdempotencyConflict
+		}
+		money, err := domain.NewMoneyFromMinorUnits(existingBalance, existingCurrency)
+		if err != nil {
+			return WagerResult{}, err
+		}
+		failStr := ""
+		if existingFailure != nil {
+			failStr = *existingFailure
+		}
+		return WagerResult{
+			TransactionID: existingID,
+			Status:        existingStatus,
+			Balance:       money,
+			WalletVersion: existingVersion,
+			Replay:        true,
+			FailureCode:   failStr,
+		}, nil
 	}
-	var used bool
-	if e := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM wager_transactions WHERE provider_id=$1 AND external_transaction_id=$2)`, in.ProviderID, in.ExternalTransactionID).Scan(&used); e != nil {
-		return WagerResult{}, e
-	}
-	if used {
-		return WagerResult{}, ErrExternalIDConflict
-	}
+
 	return WagerResult{}, cause
 }
 

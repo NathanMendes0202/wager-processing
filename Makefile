@@ -1,3 +1,5 @@
+SHELL := /bin/sh
+
 .PHONY: tidy test race vet check up down logs test-multiprocess integration e2e-compose e2e-keycloak e2e-restart scale-3 metrics-check
 
 tidy:
@@ -23,11 +25,9 @@ down:
 logs:
 	docker compose logs -f api
 
-# Requires a running PostgreSQL with the migrations applied.
 test-multiprocess:
 	TEST_DATABASE_URL="$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/wager?sslmode=disable}" go run ./cmd/multiprocess-concurrency-test
 
-# Requires PostgreSQL from docker compose to be running.
 integration:
 	TEST_DATABASE_URL="$${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/wager?sslmode=disable}" go test -tags=integration ./internal/... -v
 
@@ -35,13 +35,13 @@ scale-3:
 	docker compose up -d --build --scale api=3
 
 e2e-compose:
-	./scripts/e2e-compose.sh
+	bash ./scripts/e2e-compose.sh
 
 e2e-keycloak:
-	./scripts/e2e-keycloak.sh
+	bash ./scripts/e2e-keycloak.sh
 
 e2e-restart:
-	./scripts/e2e-restart.sh
+	bash ./scripts/e2e-restart.sh
 
 metrics-check:
 	curl -fsS http://localhost:8080/metrics

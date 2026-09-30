@@ -7,9 +7,10 @@ import (
 	"fmt"
 	"strings"
 
+	"time"
+
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"time"
 
 	"github.com/NathanMendes0202/wager-processing/internal/domain"
 )
@@ -97,7 +98,7 @@ func (r *WalletRepository) ListLedger(ctx context.Context, walletID uuid.UUID, c
 		if err != nil {
 			return nil, "", err
 		}
-		query += ` AND (created_at,id) < ($2,$3)`
+		query += ` AND (created_at < $2 OR (created_at = $2 AND id < $3))`
 		args = append(args, cursorTime, cursorID)
 	}
 	query += fmt.Sprintf(` ORDER BY created_at DESC, id DESC LIMIT %d`, limit+1)
