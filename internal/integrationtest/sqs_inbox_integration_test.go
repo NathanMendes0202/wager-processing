@@ -115,8 +115,6 @@ func TestPendingReferenceIsDurableAndInboxCompletesAtomically(t *testing.T) {
 	refundKey := "refund-key-" + uuid.NewString()
 	messageID := "pending-msg-" + uuid.NewString()
 
-	// The refund arrives before its BET reference. Its pending state, inbox
-	// completion, and pending-reference event must commit atomically.
 	refundBody := `{"messageId":"` + messageID + `","type":"WagerTransactionRequested","occurredAt":"2026-09-30T12:00:00Z","data":{"providerId":"` + provider + `","externalTransactionId":"` + refundExt + `","idempotencyKey":"` + refundKey + `","playerId":"` + playerID.String() + `","walletId":"` + walletID.String() + `","roundId":"round-pending","gameId":"game-pending","kind":"REFUND","money":{"amount":"10.00","currency":"BRL"},"referenceExternalTransactionId":"` + "bet-late-" + provider + `"}}`
 	var refundMsg messaging.WagerTransactionMessage
 	if err := json.Unmarshal([]byte(refundBody), &refundMsg); err != nil {
@@ -142,7 +140,6 @@ func TestPendingReferenceIsDurableAndInboxCompletesAtomically(t *testing.T) {
 		t.Fatal("durably persisted PENDING_REFERENCE must complete the Inbox in the same transaction")
 	}
 
-	// Deliver the missing BET, then make the pending reference immediately due.
 	betExt := "bet-late-" + provider
 	betBody := `{"messageId":"bet-msg-` + uuid.NewString() + `","type":"WagerTransactionRequested","occurredAt":"2026-09-30T12:00:00Z","data":{"providerId":"` + provider + `","externalTransactionId":"` + betExt + `","idempotencyKey":"bet-key-` + uuid.NewString() + `","playerId":"` + playerID.String() + `","walletId":"` + walletID.String() + `","roundId":"round-pending","gameId":"game-pending","kind":"BET","money":{"amount":"10.00","currency":"BRL"}}}`
 	var betMsg messaging.WagerTransactionMessage

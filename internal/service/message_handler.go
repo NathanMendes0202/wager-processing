@@ -26,7 +26,7 @@ func NewWagerMessageHandler(wagers *WagerService, db *pgxpool.Pool, inbox *messa
 }
 
 func (h *WagerMessageHandler) Handle(ctx context.Context, msg messaging.WagerTransactionMessage) error {
-	cmd, err := h.commandFromMessage(msg)
+	cmd, err := commandFromMessage(msg)
 	if err != nil {
 		return err
 	}
@@ -59,11 +59,11 @@ func (h *WagerMessageHandler) Handle(ctx context.Context, msg messaging.WagerTra
 	return tx.Commit(ctx)
 }
 
-func (h *WagerMessageHandler) commandFromMessage(msg messaging.WagerTransactionMessage) (WagerCommand, error) {
+func commandFromMessage(msg messaging.WagerTransactionMessage) (WagerCommand, error) {
 	if msg.MessageID == "" {
 		return WagerCommand{}, fmt.Errorf("%w: messageId is required", messaging.ErrInvalidMessage)
 	}
-	if msg.Type != messaging.RequestMessageType { // Usar a constante do pacote messaging se aplicável
+	if msg.Type != messaging.RequestMessageType {
 		return WagerCommand{}, fmt.Errorf("%w: unsupported message type: %s", messaging.ErrInvalidMessage, msg.Type)
 	}
 	if msg.Data.ProviderID == "" || msg.Data.ExternalTransactionID == "" || msg.Data.IdempotencyKey == "" {
@@ -87,7 +87,18 @@ func (h *WagerMessageHandler) commandFromMessage(msg messaging.WagerTransactionM
 	if err := repository.ValidateAmount(msg.Data.Kind, money); err != nil {
 		return WagerCommand{}, fmt.Errorf("%w: invalid amount: %v", messaging.ErrInvalidMessage, err)
 	}
-	return WagerCommand{ProviderID: msg.Data.ProviderID, ExternalTransactionID: msg.Data.ExternalTransactionID, IdempotencyKey: msg.Data.IdempotencyKey, PlayerID: player, WalletID: wallet, RoundID: msg.Data.RoundID, GameID: msg.Data.GameID, Kind: msg.Data.Kind, Amount: money, ReferenceExternalID: msg.Data.ReferenceExternalID}, nil
+	return WagerCommand{
+		ProviderID:            msg.Data.ProviderID,
+		ExternalTransactionID: msg.Data.ExternalTransactionID,
+		IdempotencyKey:        msg.Data.IdempotencyKey,
+		PlayerID:              player,
+		WalletID:              wallet,
+		RoundID:               msg.Data.RoundID,
+		GameID:                msg.Data.GameID,
+		Kind:                  msg.Data.Kind,
+		Amount:                money,
+		ReferenceExternalID:   msg.Data.ReferenceExternalID,
+	}, nil
 }
 
 func isPermanent(err error) bool {

@@ -92,9 +92,6 @@ func TestConcurrentBetsSingleApproval(t *testing.T) {
 	}
 }
 
-// TestSameBet50Times proves the persistent idempotency boundary: 50 concurrent
-// deliveries with the exact same provider/idempotency key must result in one
-// financial operation and 49 replays, with exactly one debit in the ledger.
 func TestSameBet50Times(t *testing.T) {
 	dsn := os.Getenv("TEST_DATABASE_URL")
 	if dsn == "" {

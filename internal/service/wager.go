@@ -4,13 +4,14 @@ import (
 	"context"
 	"errors"
 
+	"time"
+
 	"github.com/NathanMendes0202/wager-processing/internal/domain"
 	"github.com/NathanMendes0202/wager-processing/internal/metrics"
 	"github.com/NathanMendes0202/wager-processing/internal/repository"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"time"
 )
 
 type WagerService struct {
@@ -50,9 +51,6 @@ func (s *WagerService) Process(ctx context.Context, cmd WagerCommand) (repositor
 	return result, nil
 }
 
-// ProcessTx executes the financial operation inside a caller-owned PostgreSQL
-// transaction. It is used by the SQS consumer so Inbox, wallet, ledger and
-// Outbox commit atomically.
 func (s *WagerService) ProcessTx(ctx context.Context, tx pgx.Tx, cmd WagerCommand) (repository.WagerResult, error) {
 	start := time.Now()
 	result, err := s.repo.ProcessTx(ctx, tx, toRepositoryInput(cmd))

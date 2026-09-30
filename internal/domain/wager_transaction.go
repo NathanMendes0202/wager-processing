@@ -35,9 +35,6 @@ func (k TransactionKind) IsExternal() bool {
 	}
 }
 
-// CanTransitionTo defines the durable state machine. A processed/rejected
-// operation is terminal. PENDING_REFERENCE may be retried and either resolve
-// successfully or become a terminal rejection.
 func (s TransactionStatus) CanTransitionTo(next TransactionStatus) bool {
 	switch s {
 	case TransactionPending:

@@ -292,23 +292,40 @@ func (r *WagerRepository) ProcessTx(ctx context.Context, tx pgx.Tx, in WagerInpu
 
 	now := time.Now().UTC()
 	processed, e := json.Marshal(messaging.WagerTransactionProcessedData{
-		TransactionID: txID.String(), ProviderID: in.ProviderID, ExternalTransactionID: in.ExternalTransactionID,
-		WalletID: in.WalletID.String(), PlayerID: in.PlayerID.String(), Kind: in.Kind,
-		Money:  messaging.MoneyData{Amount: in.Money.String(), Currency: in.Money.Currency()},
-		Status: "PROCESSED", Balance: messaging.MoneyData{Amount: newBalance.String(), Currency: newBalance.Currency()},
-		WalletVersion: newVersion, ReferenceExternalTransactionID: in.ReferenceExternalID,
+		TransactionID:                  txID, // Removido .String()
+		ProviderID:                     in.ProviderID,
+		ExternalTransactionID:          in.ExternalTransactionID,
+		WalletID:                       in.WalletID, // Removido .String()
+		PlayerID:                       in.PlayerID, // Removido .String()
+		Kind:                           in.Kind,
+		Money:                          messaging.MoneyData{Amount: in.Money.String(), Currency: in.Money.Currency()},
+		Status:                         "PROCESSED",
+		Balance:                        messaging.MoneyData{Amount: newBalance.String(), Currency: newBalance.Currency()},
+		WalletVersion:                  newVersion,
+		ReferenceExternalTransactionID: in.ReferenceExternalID,
 	})
 	if e != nil {
 		return result, e
 	}
-	// Aggregate = transaction: a LOSS does not change the wallet version, so a
-	// wallet-based key would collide on uq_outbox_aggregate_version_type.
-	if e = r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{ID: uuid.New(), AggregateID: txID, EventType: "WagerTransactionProcessed", Correlation: in.IdempotencyKey, Causation: txID.String(), OccurredAt: now, Version: 1, Payload: processed}); e != nil {
+
+	if e = r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{
+		ID:          uuid.New(),
+		AggregateID: txID,
+		EventType:   "WagerTransactionProcessed",
+		Correlation: in.IdempotencyKey,
+		Causation:   txID.String(),
+		OccurredAt:  now,
+		Version:     1,
+		Payload:     processed,
+	}); e != nil {
 		return result, e
 	}
+
 	if direction != "" {
 		changed, e := json.Marshal(messaging.WalletBalanceChangedData{
-			WalletID: in.WalletID.String(), TransactionID: txID.String(), Direction: direction,
+			WalletID:      in.WalletID,
+			TransactionID: txID,
+			Direction:     direction,
 			Money:         messaging.MoneyData{Amount: in.Money.String(), Currency: in.Money.Currency()},
 			BalanceBefore: messaging.MoneyData{Amount: walletMoney.String(), Currency: walletMoney.Currency()},
 			BalanceAfter:  messaging.MoneyData{Amount: newBalance.String(), Currency: newBalance.Currency()},
@@ -519,15 +536,42 @@ func (r *WagerRepository) rejectTx(ctx context.Context, tx pgx.Tx, id uuid.UUID,
 }
 
 func (r *WagerRepository) insertRejectedEvent(ctx context.Context, tx pgx.Tx, id uuid.UUID, code string) error {
-	var providerID, externalID, idempotencyKey, walletID, playerID, kind string
-	if err := tx.QueryRow(ctx, `SELECT provider_id,external_transaction_id,idempotency_key,wallet_id::text,player_id::text,kind FROM wager_transactions WHERE id=$1`, id).Scan(&providerID, &externalID, &idempotencyKey, &walletID, &playerID, &kind); err != nil {
+	var providerID, externalID, idempotencyKey, walletIDStr, playerIDStr, kind string
+	if err := tx.QueryRow(ctx, `SELECT provider_id,external_transaction_id,idempotency_key,wallet_id::text,player_id::text,kind FROM wager_transactions WHERE id=$1`, id).Scan(&providerID, &externalID, &idempotencyKey, &walletIDStr, &playerIDStr, &kind); err != nil {
 		return err
 	}
-	payload, err := json.Marshal(messaging.WagerTransactionRejectedData{TransactionID: id.String(), ProviderID: providerID, ExternalTransactionID: externalID, WalletID: walletID, PlayerID: playerID, Kind: kind, FailureCode: code})
+
+	walletID, err := uuid.Parse(walletIDStr)
 	if err != nil {
 		return err
 	}
-	return r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{ID: uuid.New(), AggregateID: id, EventType: "WagerTransactionRejected", Correlation: idempotencyKey, Causation: id.String(), OccurredAt: time.Now().UTC(), Version: 1, Payload: payload})
+	playerID, err := uuid.Parse(playerIDStr)
+	if err != nil {
+		return err
+	}
+
+	payload, err := json.Marshal(messaging.WagerTransactionRejectedData{
+		TransactionID:         id, // Corrigido para uuid.UUID (sem .String())
+		ProviderID:            providerID,
+		ExternalTransactionID: externalID,
+		WalletID:              walletID, // Convertido para uuid.UUID
+		PlayerID:              playerID, // Convertido para uuid.UUID
+		Kind:                  kind,
+		FailureCode:           code,
+	})
+	if err != nil {
+		return err
+	}
+	return r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{
+		ID:          uuid.New(),
+		AggregateID: id,
+		EventType:   "WagerTransactionRejected",
+		Correlation: idempotencyKey,
+		Causation:   id.String(),
+		OccurredAt:  time.Now().UTC(),
+		Version:     1,
+		Payload:     payload,
+	})
 }
 
 func (r *WagerRepository) insertPendingReferenceEvent(ctx context.Context, tx pgx.Tx, id uuid.UUID, attempt int) error {
@@ -535,11 +579,27 @@ func (r *WagerRepository) insertPendingReferenceEvent(ctx context.Context, tx pg
 	if err := tx.QueryRow(ctx, `SELECT provider_id,external_transaction_id,idempotency_key,COALESCE(reference_external_transaction_id,'') FROM wager_transactions WHERE id=$1`, id).Scan(&providerID, &externalID, &idempotencyKey, &referenceID); err != nil {
 		return err
 	}
-	payload, err := json.Marshal(messaging.WagerTransactionPendingReferenceData{TransactionID: id.String(), ProviderID: providerID, ExternalTransactionID: externalID, ReferenceExternalTransactionID: referenceID, Attempt: attempt})
+
+	payload, err := json.Marshal(messaging.WagerTransactionPendingReferenceData{
+		TransactionID:                  id, // Corrigido para uuid.UUID (sem .String())
+		ProviderID:                     providerID,
+		ExternalTransactionID:          externalID,
+		ReferenceExternalTransactionID: referenceID,
+		Attempt:                        attempt,
+	})
 	if err != nil {
 		return err
 	}
-	return r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{ID: uuid.New(), AggregateID: id, EventType: "WagerTransactionPendingReference", Correlation: idempotencyKey, Causation: id.String(), OccurredAt: time.Now().UTC(), Version: int64(attempt), Payload: payload})
+	return r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{
+		ID:          uuid.New(),
+		AggregateID: id,
+		EventType:   "WagerTransactionPendingReference",
+		Correlation: idempotencyKey,
+		Causation:   id.String(),
+		OccurredAt:  time.Now().UTC(),
+		Version:     int64(attempt),
+		Payload:     payload,
+	})
 }
 
 type rowQuerier interface {

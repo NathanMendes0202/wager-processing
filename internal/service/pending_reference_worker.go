@@ -33,9 +33,6 @@ func referenceBackoff(attempt int) time.Duration {
 	return d
 }
 
-// PendingReferenceWorker retries REFUND/ROLLBACK transactions whose referenced
-// transaction had not arrived yet. Claiming is database-backed, so multiple
-// API instances can run this worker concurrently.
 type PendingReferenceWorker struct {
 	repo    *repository.WagerRepository
 	metrics *metrics.Metrics

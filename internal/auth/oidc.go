@@ -52,8 +52,6 @@ func (m *Middleware) getVerifier(ctx context.Context) (*oidc.IDTokenVerifier, er
 	discovery := m.issuer
 	pctx := ctx
 	if m.discoveryURL != "" && m.discoveryURL != m.issuer {
-		// O token e emitido para o issuer publico (localhost:8081), mas dentro do
-		// container o discovery e lido pela rede do compose (keycloak:8080).
 		discovery = m.discoveryURL
 		pctx = oidc.InsecureIssuerURLContext(ctx, m.issuer)
 	}

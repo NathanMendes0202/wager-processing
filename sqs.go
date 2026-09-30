@@ -18,6 +18,32 @@ import (
 	"github.com/NathanMendes0202/wager-processing/internal/metrics"
 )
 
+type MoneyData struct {
+	Amount   string `json:"amount"`
+	Currency string `json:"currency"`
+}
+
+type WagerTransactionData struct {
+	ProviderID            string    `json:"providerId"`
+	ExternalTransactionID string    `json:"externalTransactionId"`
+	IdempotencyKey        string    `json:"idempotencyKey"`
+	PlayerID              string    `json:"playerId"`
+	WalletID              string    `json:"walletId"`
+	RoundID               string    `json:"roundId"`
+	GameID                string    `json:"gameId"`
+	Kind                  string    `json:"kind"`
+	Money                 MoneyData `json:"money"`
+	ReferenceExternalID   string    `json:"referenceExternalTransactionId,omitempty"`
+}
+
+type WagerTransactionMessage struct {
+	MessageID  string               `json:"messageId"`
+	Type       string               `json:"type"`
+	OccurredAt time.Time            `json:"occurredAt"`
+	Data       WagerTransactionData `json:"data"`
+	RawBody    string               `json:"-"`
+}
+
 type Publisher struct {
 	client   *sqs.Client
 	queueURL string
@@ -64,6 +90,11 @@ func (p *Publisher) Publish(ctx context.Context, msg WagerTransactionMessage) er
 	})
 	return err
 }
+
+var (
+	ErrInvalidMessage   = errors.New("invalid SQS message")
+	ErrPermanentMessage = errors.New("permanent SQS message failure")
+)
 
 type Consumer struct {
 	client   *sqs.Client
@@ -162,10 +193,11 @@ func (c *Consumer) handleMessage(ctx context.Context, msg types.Message) error {
 	if event.Type == "" {
 		return fmt.Errorf("%w: type is required", ErrInvalidMessage)
 	}
-	// ADICIONE ESTA LINHA ABAIXO:
+
 	if event.Type != "WagerTransactionRequested" {
 		return fmt.Errorf("%w: unsupported message type: %s", ErrInvalidMessage, event.Type)
 	}
+
 	if event.OccurredAt.IsZero() {
 		return fmt.Errorf("%w: occurredAt is required", ErrInvalidMessage)
 	}
@@ -182,19 +214,12 @@ func (c *Consumer) backoffMessage(ctx context.Context, msg types.Message) error 
 		return nil
 	}
 	attempts := 1
-	if countStr, ok := msg.Attributes[string(types.MessageSystemAttributeNameApproximateReceiveCount)]; ok {
-		if parsed, err := strconv.Atoi(countStr); err == nil && parsed > 0 {
+	if raw, ok := msg.Attributes[string(types.MessageSystemAttributeNameApproximateReceiveCount)]; ok {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 {
 			attempts = parsed
 		}
 	}
-	delay := 5 * time.Second
-	for i := 1; i < attempts; i++ {
-		delay *= 2
-		if delay >= 5*time.Minute {
-			delay = 5 * time.Minute
-			break
-		}
-	}
+	delay := consumerBackoff(attempts)
 	_, err := c.client.ChangeMessageVisibility(ctx, &sqs.ChangeMessageVisibilityInput{
 		QueueUrl: aws.String(c.queueURL), ReceiptHandle: msg.ReceiptHandle, VisibilityTimeout: int32(delay / time.Second),
 	})

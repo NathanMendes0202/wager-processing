@@ -19,7 +19,6 @@ A="$(python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])' <<
 B="$(token provider-b provider-b-secret | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
 I="$(token wager-internal internal-secret | python -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')"
 
-# Missing/invalid bearer must be rejected while liveness remains public.
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/wagering/transactions")
 test "$code" = 401
 code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer invalid-token' "$API/wagering/transactions")
@@ -37,7 +36,6 @@ BODY="{\"providerId\":\"provider-a\",\"externalTransactionId\":\"$EXT\",\"player
 HTTP_RESULT=$(curl -fsS -X POST "$API/wagering/transactions" -H "Authorization: Bearer $A" -H "Idempotency-Key: $IDEM" -H 'Content-Type: application/json' -d "$BODY")
 TX=$(python -c 'import json,sys; print(json.load(sys.stdin)["transactionId"])' <<<"$HTTP_RESULT")
 
-# Same operation through SQS/async must resolve to the persisted operation, not debit again.
 curl -fsS -X POST "$API/wagering/transactions/async" -H "Authorization: Bearer $A" -H "Idempotency-Key: $IDEM" -H 'Content-Type: application/json' -d "$BODY" >/dev/null
 for _ in $(seq 1 20); do
   TX_JSON=$(curl -fsS -H "Authorization: Bearer $A" "$API/wagering/transactions/$TX")
@@ -49,8 +47,6 @@ test "$STATUS" = "PROCESSED"
 BALANCE=$(curl -fsS -H "Authorization: Bearer $I" "$API/wallets/$WALLET" | python -c 'import json,sys; print(json.load(sys.stdin)["balance"]["amount"])')
 test "$BALANCE" = "90.00"
 
-# Reverse direction: first accept through SQS, then submit the same operation
-# through HTTP. The second path must be an idempotent replay, not a second debit.
 PLAYER2=$(python -c 'import uuid; print(uuid.uuid4())')
 WALLET_JSON2=$(curl -fsS -X POST "$API/wallets" -H "Authorization: Bearer $I" -H 'Content-Type: application/json' -d "{\"playerId\":\"$PLAYER2\",\"initialBalance\":{\"amount\":\"100.00\",\"currency\":\"BRL\"}}")
 WALLET2=$(python -c 'import json,sys; print(json.load(sys.stdin)["id"])' <<<"$WALLET_JSON2")
@@ -69,8 +65,6 @@ curl -fsS -X POST "$API/wagering/transactions" -H "Authorization: Bearer $A" -H 
 BALANCE2=$(curl -fsS -H "Authorization: Bearer $I" "$API/wallets/$WALLET2" | python -c 'import json,sys; print(json.load(sys.stdin)["balance"]["amount"])')
 test "$BALANCE2" = "90.00"
 
-# Invalid envelope (missing envelope messageId) must be moved to request DLQ
-# without creating any financial transaction.
 INVALID_BODY='{"type":"WagerTransactionRequested","occurredAt":"2026-09-30T12:00:00Z","data":{}}'
 docker compose exec -T localstack awslocal sqs send-message \
   --queue-url http://localhost:4566/000000000000/wager-transactions.fifo \
@@ -87,11 +81,9 @@ done
 test "$DLQ_COUNT" -gt 0
 curl -fsS "$API/metrics" | grep -Eq '^wager_request_dlq_total [1-9][0-9]*$'
 
-# Provider isolation: provider-b cannot read provider-a's transaction.
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer $B" "$API/providers/provider-a/wagering/transactions/$EXT")
 test "$code" = 403
 
-# Explicit expired-token verification: temporarily shorten realm access-token lifespan.
 ADMIN_TOKEN=$(curl -fsS -X POST "$ADMIN_TOKEN_URL" -H 'Content-Type: application/x-www-form-urlencoded' \
   --data-urlencode grant_type=password --data-urlencode client_id=admin-cli \
   --data-urlencode username=admin --data-urlencode password=admin | \

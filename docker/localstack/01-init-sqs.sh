@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 
-# JSON completo em --attributes: a sintaxe curta quebra na RedrivePolicy (virgulas).
 awslocal sqs create-queue --queue-name wager-transactions-dlq.fifo \
   --attributes '{"FifoQueue":"true","ContentBasedDeduplication":"false"}'
 

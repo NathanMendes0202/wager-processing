@@ -66,11 +66,28 @@ func (r *WalletRepository) Create(ctx context.Context, in CreateWalletInput) (do
 		}
 
 		if r.outbox != nil {
-			payload, marshalErr := json.Marshal(messaging.WalletBalanceChangedData{WalletID: walletID.String(), TransactionID: txID.String(), Direction: "CREDIT", Money: messaging.MoneyData{Amount: in.InitialAmount.String(), Currency: in.InitialAmount.Currency()}, BalanceBefore: messaging.MoneyData{Amount: "0.00", Currency: in.InitialAmount.Currency()}, BalanceAfter: messaging.MoneyData{Amount: in.InitialAmount.String(), Currency: in.InitialAmount.Currency()}, WalletVersion: 1})
+			payload, marshalErr := json.Marshal(messaging.WalletBalanceChangedData{
+				WalletID:      walletID, // Removido .String() (agora passa o uuid.UUID direto)
+				TransactionID: txID,     // Removido .String() (agora passa o uuid.UUID direto)
+				Direction:     "CREDIT",
+				Money:         messaging.MoneyData{Amount: in.InitialAmount.String(), Currency: in.InitialAmount.Currency()},
+				BalanceBefore: messaging.MoneyData{Amount: "0.00", Currency: in.InitialAmount.Currency()},
+				BalanceAfter:  messaging.MoneyData{Amount: in.InitialAmount.String(), Currency: in.InitialAmount.Currency()},
+				WalletVersion: 1,
+			})
 			if marshalErr != nil {
 				return domain.Wallet{}, marshalErr
 			}
-			if err = r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{ID: uuid.New(), AggregateID: walletID, EventType: "WalletBalanceChanged", Correlation: txID.String(), Causation: txID.String(), OccurredAt: time.Now().UTC(), Version: 1, Payload: payload}); err != nil {
+			if err = r.outbox.InsertTx(ctx, tx, messaging.OutboxEvent{
+				ID:          uuid.New(),
+				AggregateID: walletID,
+				EventType:   "WalletBalanceChanged",
+				Correlation: txID.String(), // Mantido .String() aqui (Correlation costuma ser string)
+				Causation:   txID.String(), // Mantido .String() aqui (Causation costuma ser string)
+				OccurredAt:  time.Now().UTC(),
+				Version:     1,
+				Payload:     payload,
+			}); err != nil {
 				return domain.Wallet{}, err
 			}
 		}

@@ -1,12 +1,18 @@
 package messaging
 
-// Event payloads are explicit contracts for consumers of the transactional outbox.
+import (
+	"github.com/google/uuid"
+)
+
+const RequestMessageType = "WagerTransactionRequested"
+
+// Event payloads explicitamente adaptados para aceitar uuid.UUID diretamente
 type WagerTransactionProcessedData struct {
-	TransactionID                  string    `json:"transactionId"`
+	TransactionID                  uuid.UUID `json:"transactionId"`
 	ProviderID                     string    `json:"providerId"`
 	ExternalTransactionID          string    `json:"externalTransactionId"`
-	WalletID                       string    `json:"walletId"`
-	PlayerID                       string    `json:"playerId"`
+	WalletID                       uuid.UUID `json:"walletId"`
+	PlayerID                       uuid.UUID `json:"playerId"`
 	Kind                           string    `json:"kind"`
 	Money                          MoneyData `json:"money"`
 	Status                         string    `json:"status"`
@@ -16,26 +22,27 @@ type WagerTransactionProcessedData struct {
 }
 
 type WagerTransactionRejectedData struct {
-	TransactionID         string `json:"transactionId"`
-	ProviderID            string `json:"providerId"`
-	ExternalTransactionID string `json:"externalTransactionId"`
-	WalletID              string `json:"walletId"`
-	PlayerID              string `json:"playerId"`
-	Kind                  string `json:"kind"`
-	FailureCode           string `json:"failureCode"`
+	TransactionID         uuid.UUID `json:"transactionId"`
+	ProviderID            string    `json:"providerId"`
+	ExternalTransactionID string    `json:"externalTransactionId"`
+	WalletID              uuid.UUID `json:"walletId"`
+	PlayerID              uuid.UUID `json:"playerId"`
+	Kind                  string    `json:"kind"`
+	FailureCode           string    `json:"failureCode"`
 }
 
 type WagerTransactionPendingReferenceData struct {
-	TransactionID                  string `json:"transactionId"`
-	ProviderID                     string `json:"providerId"`
-	ExternalTransactionID          string `json:"externalTransactionId"`
-	ReferenceExternalTransactionID string `json:"referenceExternalTransactionId"`
-	Attempt                        int    `json:"attempt"`
+	TransactionID                  uuid.UUID `json:"transactionId"`
+	ProviderID                     string    `json:"providerId"`
+	ExternalTransactionID          string    `json:"externalTransactionId"`
+	ReferenceExternalTransactionID string    `json:"referenceExternalTransactionId"`
+	Attempt                        int       `json:"attempt"`
+	WalletID                       uuid.UUID `json:"walletId"`
 }
 
 type WalletBalanceChangedData struct {
-	WalletID      string    `json:"walletId"`
-	TransactionID string    `json:"transactionId"`
+	WalletID      uuid.UUID `json:"walletId"`
+	TransactionID uuid.UUID `json:"transactionId"`
 	Direction     string    `json:"direction"`
 	Money         MoneyData `json:"money"`
 	BalanceBefore MoneyData `json:"balanceBefore"`

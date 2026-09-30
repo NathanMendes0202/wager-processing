@@ -184,7 +184,6 @@ func TestLossAndSingleReversalRules(t *testing.T) {
 		t.Fatal("rejection must emit WagerTransactionRejected")
 	}
 
-	// Payload of the balance event carries the ledger view of the change.
 	var payload []byte
 	if err := e.pool.QueryRow(e.ctx, `SELECT payload FROM outbox_events WHERE causation_id=$1 AND event_type=$2`, refund.TransactionID.String(), messaging.EventWalletBalanceChanged).Scan(&payload); err != nil {
 		t.Fatal(err)
